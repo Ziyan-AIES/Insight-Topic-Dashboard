@@ -101,7 +101,7 @@ async function loadTopics() {
 
   topics = data || [];
   render();
-  setStatus(`Synced at ${new Date().toLocaleTimeString()}`);
+  setStatus(`Synced ${formatDateOnly(new Date())}`);
 }
 
 function render() {
