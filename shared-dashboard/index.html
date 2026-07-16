@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Monthly Insights Dashboard</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="page">
+      <header class="hero">
+        <h1>Monthly Insights Dashboard</h1>
+        <p>Shared live board. Edit and save directly here.</p>
+      </header>
+
+      <section class="toolbar">
+        <div class="toolbar-group-title">View Controls</div>
+        <div class="view-controls">
+          <input id="editorName" placeholder="Your name (for update log)" />
+          <select id="filterCategory">
+            <option value="all">All categories</option>
+            <option value="interaction">Interaction</option>
+            <option value="ai_software">AI Software</option>
+            <option value="ai_hardware">AI Hardware</option>
+            <option value="ecosystem">Ecosystem</option>
+            <option value="ai_capability">AI Capability</option>
+            <option value="industry_events">Industry Events</option>
+          </select>
+          <button id="toggleEditBtn">Switch to Edit Mode</button>
+          <span id="statusText">Connecting...</span>
+        </div>
+        <div id="editTitle" class="toolbar-group-title hidden">Edit Controls</div>
+        <div id="editControls" class="edit-controls hidden">
+          <input id="newMonthInput" placeholder="New month (e.g. Jul 2026)" />
+          <button id="addMonthBtn">Add Month</button>
+          <span class="edit-hint">Edit mode is on: you can edit cards, add topics, delete topics.</span>
+        </div>
+      </section>
+
+      <section id="board" class="board"></section>
+    </main>
+
+    <script type="module" src="./app.js"></script>
+  </body>
+  </html>
