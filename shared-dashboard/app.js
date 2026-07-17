@@ -17,6 +17,7 @@ const editorNameInput = document.getElementById("editorName");
 const filterCategorySelect = document.getElementById("filterCategory");
 const newMonthInput = document.getElementById("newMonthInput");
 const addMonthBtn = document.getElementById("addMonthBtn");
+const saveAllBtn = document.getElementById("saveAllBtn");
 const toggleEditBtn = document.getElementById("toggleEditBtn");
 const editControls = document.getElementById("editControls");
 const editTitle = document.getElementById("editTitle");
@@ -109,10 +110,12 @@ function render() {
   const visible = filter === "all" ? topics : topics.filter((t) => t.category === filter);
   const groups = monthGroups(visible);
 
+  const today = new Date();
+  const currentMonthOrder = today.getFullYear() * 100 + (today.getMonth() + 1);
   board.innerHTML = groups
     .map(
       (group) => `
-      <article class="month">
+      <article class="month ${group.month_order >= currentMonthOrder ? "current-future" : ""}">
         <div class="month-head">
           <h3>${group.month_label}</h3>
           <div class="month-tools">
@@ -132,10 +135,12 @@ function render() {
                 <button class="btn save" data-action="save">Save</button>
               </div>
               <input data-field="notes" value="${escapeHtml(item.notes || "")}" placeholder="Notes" />
+              <input data-field="updated_by" value="${escapeHtml(item.updated_by || "")}" placeholder="Writer" />
             `
                 : `
               <div class="topic-title">${escapeHtml(item.topic_title)}</div>
               <div>${CATEGORIES.find((c) => c.value === item.category)?.label || item.category}</div>
+              ${item.notes ? `<div class="topic-note">${escapeHtml(item.notes)}</div>` : ""}
             `
             }
             <div class="${isEditMode ? "meta-row" : "row"}">
@@ -160,13 +165,43 @@ function escapeHtml(v) {
     .replaceAll('"', "&quot;");
 }
 
-async function saveTopic(topicId, sectionEl) {
-  const editor = editorNameInput.value.trim() || "teammate";
-  const topicTitle = sectionEl.querySelector('[data-field="topic_title"]').value.trim();
-  const category = sectionEl.querySelector('[data-field="category"]').value;
-  const monthLabel = sectionEl.dataset.monthLabel;
+function getTopicSnapshotById(topicId) {
+  return topics.find((item) => item.id === topicId) || null;
+}
+
+function collectTopicValues(sectionEl) {
+  const topicId = sectionEl.dataset.id;
+  const topicTitle = sectionEl.querySelector('[data-field="topic_title"]')?.value.trim() || "";
+  const category = sectionEl.querySelector('[data-field="category"]')?.value || "";
+  const notes = sectionEl.querySelector('[data-field="notes"]')?.value.trim() || "";
+  const updatedBy =
+    sectionEl.querySelector('[data-field="updated_by"]')?.value.trim() ||
+    editorNameInput.value.trim() ||
+    "teammate";
+  const monthLabel = sectionEl.dataset.monthLabel || "";
   const monthOrder = Number(sectionEl.dataset.monthOrder);
-  const notes = sectionEl.querySelector('[data-field="notes"]').value.trim();
+
+  return { topicId, topicTitle, category, notes, updatedBy, monthLabel, monthOrder };
+}
+
+function isTopicChanged(current, original) {
+  if (!original) return true;
+  return (
+    current.topicTitle !== (original.topic_title || "") ||
+    current.category !== (original.category || "") ||
+    current.notes !== (original.notes || "") ||
+    current.updatedBy !== (original.updated_by || "")
+  );
+}
+
+async function saveTopic(topicId, sectionEl) {
+  const current = collectTopicValues(sectionEl);
+  const editor = current.updatedBy;
+  const topicTitle = current.topicTitle;
+  const category = current.category;
+  const monthLabel = current.monthLabel;
+  const monthOrder = current.monthOrder;
+  const notes = current.notes;
 
   if (!topicTitle) {
     setStatus("Topic title is required");
@@ -196,6 +231,31 @@ async function saveTopic(topicId, sectionEl) {
     return;
   }
   setStatus("Saved");
+}
+
+async function saveAllTopics() {
+  if (!isEditMode) return;
+  const topicEls = [...board.querySelectorAll(".topic[data-id]")];
+  if (topicEls.length === 0) return;
+  setStatus("Checking changes...");
+  const changedSections = topicEls.filter((sectionEl) => {
+    const current = collectTopicValues(sectionEl);
+    const original = getTopicSnapshotById(current.topicId);
+    return isTopicChanged(current, original);
+  });
+
+  if (changedSections.length === 0) {
+    setStatus(`No changes to save (${formatDateOnly(new Date())})`);
+    return;
+  }
+
+  setStatus(`Saving ${changedSections.length} changed item(s)...`);
+  for (const sectionEl of changedSections) {
+    const topicId = sectionEl.dataset.id;
+    if (!topicId) continue;
+    await saveTopic(topicId, sectionEl);
+  }
+  setStatus(`Saved ${changedSections.length} changed item(s) (${formatDateOnly(new Date())})`);
 }
 
 async function deleteTopic(topicId) {
@@ -258,7 +318,14 @@ function bindEvents() {
     await addMonth();
   });
 
-  toggleEditBtn.addEventListener("click", () => {
+  saveAllBtn.addEventListener("click", async () => {
+    await saveAllTopics();
+  });
+
+  toggleEditBtn.addEventListener("click", async () => {
+    if (isEditMode) {
+      await saveAllTopics();
+    }
     isEditMode = !isEditMode;
     toggleEditBtn.textContent = isEditMode ? "Switch to View Mode" : "Switch to Edit Mode";
     editControls.classList.toggle("hidden", !isEditMode);

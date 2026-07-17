@@ -45,7 +45,7 @@ body {
 }
 .edit-controls {
   display: grid;
-  grid-template-columns: 220px 120px 1fr;
+  grid-template-columns: 220px 120px 120px 1fr;
   gap: 10px;
   align-items: center;
   margin-top: 10px;
@@ -69,9 +69,12 @@ body {
 
 .month {
   min-width: 380px;
-  background: #eaf1ffcc;
+  background: #eef4ffcc;
   border-radius: 14px;
   padding: 10px;
+}
+.month.current-future {
+  background: #dfe9ff;
 }
 .month h3 {
   margin: 0 0 10px 0;
@@ -123,8 +126,16 @@ body {
 }
 .topic .meta-row {
   display: grid;
-  grid-template-columns: 1fr 78px;
+  grid-template-columns: minmax(0, 1fr) 100px;
   gap: 6px;
+}
+.topic-note {
+  margin-top: 6px;
+  font-size: 13px;
+  color: #4b5674;
+  background: #edf3ff;
+  border-radius: 8px;
+  padding: 7px 8px;
 }
 .topic .hint {
   font-size: 12px;
