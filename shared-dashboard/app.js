@@ -27,6 +27,9 @@ const board = document.getElementById("board");
 let supabase = null;
 let topics = [];
 let isEditMode = false;
+let draggedTopicId = null;
+let hasDisplayOrder = true;
+let warnedMissingDisplayOrder = false;
 
 function formatDateOnly(ts) {
   return new Date(ts).toISOString().slice(0, 10);
@@ -89,11 +92,34 @@ function parseMonthOrder(label) {
 }
 
 async function loadTopics() {
-  const { data, error } = await supabase
-    .from("monthly_topics")
-    .select("*")
-    .order("month_order", { ascending: true })
-    .order("updated_at", { ascending: true });
+  let data = null;
+  let error = null;
+
+  if (hasDisplayOrder) {
+    const result = await supabase
+      .from("monthly_topics")
+      .select("*")
+      .order("month_order", { ascending: true })
+      .order("display_order", { ascending: true })
+      .order("updated_at", { ascending: true });
+    data = result.data;
+    error = result.error;
+
+    if (error && String(error.message || "").includes("display_order")) {
+      hasDisplayOrder = false;
+      error = null;
+    }
+  }
+
+  if (!data && !error) {
+    const fallback = await supabase
+      .from("monthly_topics")
+      .select("*")
+      .order("month_order", { ascending: true })
+      .order("updated_at", { ascending: true });
+    data = fallback.data;
+    error = fallback.error;
+  }
 
   if (error) {
     setStatus(`Load failed: ${error.message}`);
@@ -122,10 +148,12 @@ function render() {
             ${isEditMode ? `<button class="btn ghost" data-action="add-topic-month" data-month-label="${escapeHtml(group.month_label)}" data-month-order="${group.month_order}">Add Topic</button>` : ""}
           </div>
         </div>
+        <div class="topic-list">
         ${group.items
           .map(
             (item) => `
-          <section class="topic" data-id="${item.id}" data-month-label="${escapeHtml(item.month_label)}" data-month-order="${item.month_order}">
+          <section class="topic" draggable="true" data-id="${item.id}" data-month-label="${escapeHtml(item.month_label)}" data-month-order="${item.month_order}">
+            <div class="topic-drag-row"><span class="drag-handle">Drag to move</span></div>
             ${
               isEditMode
                 ? `
@@ -151,6 +179,7 @@ function render() {
         `
           )
           .join("")}
+        </div>
       </article>
     `
     )
@@ -258,6 +287,61 @@ async function saveAllTopics() {
   setStatus(`Saved ${changedSections.length} changed item(s) (${formatDateOnly(new Date())})`);
 }
 
+async function persistBoardOrder() {
+  const topicEls = [...board.querySelectorAll(".topic[data-id]")];
+  if (topicEls.length === 0) return;
+
+  const grouped = [...board.querySelectorAll(".month")].map((monthEl) => {
+    const monthTitle = monthEl.querySelector("h3")?.textContent?.trim() || "";
+    const monthOrder = parseMonthOrder(monthTitle);
+    const items = [...monthEl.querySelectorAll(".topic[data-id]")];
+    return { monthTitle, monthOrder, items };
+  });
+
+  if (grouped.some((g) => !g.monthOrder)) {
+    setStatus("Cannot persist move: invalid month label format.");
+    return;
+  }
+
+  setStatus("Saving card move...");
+  const editor = editorNameInput.value.trim() || "teammate";
+
+  for (const group of grouped) {
+    for (let idx = 0; idx < group.items.length; idx += 1) {
+      const topicEl = group.items[idx];
+      const topicId = topicEl.dataset.id;
+      if (!topicId) continue;
+
+      const payload = {
+        month_label: group.monthTitle,
+        month_order: group.monthOrder,
+        updated_by: editor,
+      };
+      if (hasDisplayOrder) payload.display_order = idx + 1;
+
+      let { error } = await supabase.from("monthly_topics").update(payload).eq("id", topicId);
+
+      if (error && hasDisplayOrder && String(error.message || "").includes("display_order")) {
+        hasDisplayOrder = false;
+        delete payload.display_order;
+        ({ error } = await supabase.from("monthly_topics").update(payload).eq("id", topicId));
+        if (!warnedMissingDisplayOrder) {
+          warnedMissingDisplayOrder = true;
+          setStatus("Moved across months saved. Run SQL to add display_order for full reorder support.");
+        }
+      }
+
+      if (error) {
+        setStatus(`Move save failed: ${error.message}`);
+        return;
+      }
+    }
+  }
+
+  await loadTopics();
+  setStatus(`Move saved (${formatDateOnly(new Date())})`);
+}
+
 async function deleteTopic(topicId) {
   setStatus("Deleting...");
   const { error } = await supabase.from("monthly_topics").delete().eq("id", topicId);
@@ -352,6 +436,54 @@ function bindEvents() {
 
     if (action === "save") await saveTopic(topicId, section);
     if (action === "delete") await deleteTopic(topicId);
+  });
+
+  board.addEventListener("dragstart", (e) => {
+    const topicEl = e.target.closest(".topic[data-id]");
+    if (!topicEl) return;
+    if (e.target.closest("input, select, button, textarea")) return;
+    draggedTopicId = topicEl.dataset.id;
+    topicEl.classList.add("dragging");
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("text/plain", draggedTopicId || "");
+  });
+
+  board.addEventListener("dragend", (e) => {
+    const topicEl = e.target.closest(".topic[data-id]");
+    if (topicEl) topicEl.classList.remove("dragging");
+    draggedTopicId = null;
+  });
+
+  board.addEventListener("dragover", (e) => {
+    const draggedEl = board.querySelector(`.topic[data-id="${draggedTopicId}"]`);
+    if (!draggedEl) return;
+
+    const monthEl = e.target.closest(".month");
+    if (!monthEl) return;
+    e.preventDefault();
+
+    const overTopic = e.target.closest(".topic[data-id]");
+    const listEl = monthEl.querySelector(".topic-list");
+    if (!listEl) return;
+
+    if (overTopic && overTopic !== draggedEl) {
+      const rect = overTopic.getBoundingClientRect();
+      const before = e.clientY < rect.top + rect.height / 2;
+      if (before) {
+        listEl.insertBefore(draggedEl, overTopic);
+      } else {
+        listEl.insertBefore(draggedEl, overTopic.nextSibling);
+      }
+    } else if (!overTopic) {
+      listEl.appendChild(draggedEl);
+    }
+  });
+
+  board.addEventListener("drop", async (e) => {
+    const monthEl = e.target.closest(".month");
+    if (!monthEl || !draggedTopicId) return;
+    e.preventDefault();
+    await persistBoardOrder();
   });
 }
 

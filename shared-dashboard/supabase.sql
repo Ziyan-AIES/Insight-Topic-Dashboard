@@ -6,6 +6,7 @@ create table if not exists public.monthly_topics (
   id uuid primary key default gen_random_uuid(),
   month_label text not null,
   month_order int not null,
+  display_order int not null default 1,
   topic_title text not null,
   category text not null check (category in (
     'interaction',
@@ -22,6 +23,11 @@ create table if not exists public.monthly_topics (
 
 create index if not exists idx_monthly_topics_month_order
   on public.monthly_topics(month_order asc, updated_at asc);
+create index if not exists idx_monthly_topics_month_display_order
+  on public.monthly_topics(month_order asc, display_order asc);
+
+alter table public.monthly_topics
+add column if not exists display_order int not null default 1;
 
 create or replace function public.touch_updated_at()
 returns trigger as $$
