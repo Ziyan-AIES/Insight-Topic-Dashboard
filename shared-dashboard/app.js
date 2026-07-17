@@ -153,7 +153,6 @@ function render() {
           .map(
             (item) => `
           <section class="topic" draggable="true" data-id="${item.id}" data-month-label="${escapeHtml(item.month_label)}" data-month-order="${item.month_order}">
-            <div class="topic-drag-row"><span class="drag-handle">Drag to move</span></div>
             ${
               isEditMode
                 ? `
@@ -451,7 +450,10 @@ function bindEvents() {
   board.addEventListener("dragend", (e) => {
     const topicEl = e.target.closest(".topic[data-id]");
     if (topicEl) topicEl.classList.remove("dragging");
-    draggedTopicId = null;
+    // Delay clear so drop handler can still read current drag id.
+    setTimeout(() => {
+      draggedTopicId = null;
+    }, 0);
   });
 
   board.addEventListener("dragover", (e) => {
@@ -481,8 +483,10 @@ function bindEvents() {
 
   board.addEventListener("drop", async (e) => {
     const monthEl = e.target.closest(".month");
-    if (!monthEl || !draggedTopicId) return;
+    const droppedId = draggedTopicId || e.dataTransfer?.getData("text/plain");
+    if (!monthEl || !droppedId) return;
     e.preventDefault();
+    draggedTopicId = droppedId;
     await persistBoardOrder();
   });
 }
