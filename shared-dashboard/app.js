@@ -30,6 +30,8 @@ let isEditMode = false;
 let draggedTopicId = null;
 let hasDisplayOrder = true;
 let warnedMissingDisplayOrder = false;
+let isMutating = false;
+let realtimeRefreshPending = false;
 
 function formatDateOnly(ts) {
   return new Date(ts).toISOString().slice(0, 10);
@@ -37,6 +39,16 @@ function formatDateOnly(ts) {
 
 function setStatus(message) {
   statusText.textContent = message;
+}
+
+function beginMutation() {
+  isMutating = true;
+}
+
+async function endMutation() {
+  isMutating = false;
+  realtimeRefreshPending = false;
+  await loadTopics();
 }
 
 function requireClient() {
@@ -159,7 +171,6 @@ function render() {
               <input class="edit-topic-title" data-field="topic_title" value="${escapeHtml(item.topic_title)}" />
               <div class="edit-secondary">
                 <select data-field="category">${categoryOptions(item.category)}</select>
-                <button class="btn save" data-action="save">Save</button>
               </div>
               <input data-field="notes" value="${escapeHtml(item.notes || "")}" placeholder="Notes" />
               <input data-field="updated_by" value="${escapeHtml(item.updated_by || "")}" placeholder="Writer" />
@@ -199,17 +210,16 @@ function getTopicSnapshotById(topicId) {
 
 function collectTopicValues(sectionEl) {
   const topicId = sectionEl.dataset.id;
+  const original = getTopicSnapshotById(topicId);
   const topicTitle = sectionEl.querySelector('[data-field="topic_title"]')?.value.trim() || "";
   const category = sectionEl.querySelector('[data-field="category"]')?.value || "";
   const notes = sectionEl.querySelector('[data-field="notes"]')?.value.trim() || "";
-  const updatedBy =
-    sectionEl.querySelector('[data-field="updated_by"]')?.value.trim() ||
-    editorNameInput.value.trim() ||
-    "teammate";
+  const writerInput = sectionEl.querySelector('[data-field="updated_by"]')?.value.trim() || "";
+  const updatedBy = writerInput || original?.updated_by || editorNameInput.value.trim() || "teammate";
   const monthLabel = sectionEl.dataset.monthLabel || "";
   const monthOrder = Number(sectionEl.dataset.monthOrder);
 
-  return { topicId, topicTitle, category, notes, updatedBy, monthLabel, monthOrder };
+  return { topicId, topicTitle, category, notes, writerInput, updatedBy, monthLabel, monthOrder };
 }
 
 function isTopicChanged(current, original) {
@@ -218,13 +228,25 @@ function isTopicChanged(current, original) {
     current.topicTitle !== (original.topic_title || "") ||
     current.category !== (original.category || "") ||
     current.notes !== (original.notes || "") ||
-    current.updatedBy !== (original.updated_by || "")
+    current.writerInput !== (original.updated_by || "")
   );
 }
 
-async function saveTopic(topicId, sectionEl) {
+async function updateTopicRecord(topicId, sectionEl) {
   const current = collectTopicValues(sectionEl);
-  const editor = current.updatedBy;
+  const original = getTopicSnapshotById(topicId);
+  const contentChanged =
+    !original ||
+    current.topicTitle !== (original.topic_title || "") ||
+    current.category !== (original.category || "") ||
+    current.notes !== (original.notes || "");
+  const writerChanged = current.writerInput !== (original?.updated_by || "");
+  const editor =
+    writerChanged
+      ? current.writerInput || editorNameInput.value.trim() || "teammate"
+      : contentChanged && editorNameInput.value.trim()
+        ? editorNameInput.value.trim()
+        : original?.updated_by || current.updatedBy;
   const topicTitle = current.topicTitle;
   const category = current.category;
   const monthLabel = current.monthLabel;
@@ -241,7 +263,6 @@ async function saveTopic(topicId, sectionEl) {
     return;
   }
 
-  setStatus("Saving...");
   const { error } = await supabase
     .from("monthly_topics")
     .update({
@@ -256,9 +277,17 @@ async function saveTopic(topicId, sectionEl) {
 
   if (error) {
     setStatus(`Save failed: ${error.message}`);
-    return;
+    return false;
   }
-  setStatus("Saved");
+  return true;
+}
+
+async function saveTopic(topicId, sectionEl) {
+  setStatus("Saving...");
+  beginMutation();
+  const saved = await updateTopicRecord(topicId, sectionEl);
+  await endMutation();
+  if (saved) setStatus("Saved");
 }
 
 async function saveAllTopics() {
@@ -277,13 +306,16 @@ async function saveAllTopics() {
     return;
   }
 
-  setStatus(`Saving ${changedSections.length} changed item(s)...`);
-  for (const sectionEl of changedSections) {
+  setStatus(`Saving ${changedSections.length} changed card(s)...`);
+  beginMutation();
+  const results = await Promise.all(changedSections.map(async (sectionEl) => {
     const topicId = sectionEl.dataset.id;
-    if (!topicId) continue;
-    await saveTopic(topicId, sectionEl);
-  }
-  setStatus(`Saved ${changedSections.length} changed item(s) (${formatDateOnly(new Date())})`);
+    if (!topicId) return false;
+    return updateTopicRecord(topicId, sectionEl);
+  }));
+  const savedCount = results.filter(Boolean).length;
+  await endMutation();
+  setStatus(`Saved ${savedCount} changed card(s) (${formatDateOnly(new Date())})`);
 }
 
 async function persistBoardOrder() {
@@ -303,20 +335,30 @@ async function persistBoardOrder() {
   }
 
   setStatus("Saving card move...");
-  const editor = editorNameInput.value.trim() || "teammate";
+  beginMutation();
+  let movedCount = 0;
 
   for (const group of grouped) {
     for (let idx = 0; idx < group.items.length; idx += 1) {
       const topicEl = group.items[idx];
       const topicId = topicEl.dataset.id;
       if (!topicId) continue;
+      const original = getTopicSnapshotById(topicId);
+      const nextDisplayOrder = idx + 1;
+      const monthChanged =
+        !original ||
+        original.month_label !== group.monthTitle ||
+        Number(original.month_order) !== group.monthOrder;
+      const orderChanged =
+        hasDisplayOrder && (!original || Number(original.display_order) !== nextDisplayOrder);
+
+      if (!monthChanged && !orderChanged) continue;
 
       const payload = {
         month_label: group.monthTitle,
         month_order: group.monthOrder,
-        updated_by: editor,
       };
-      if (hasDisplayOrder) payload.display_order = idx + 1;
+      if (hasDisplayOrder) payload.display_order = nextDisplayOrder;
 
       let { error } = await supabase.from("monthly_topics").update(payload).eq("id", topicId);
 
@@ -331,14 +373,20 @@ async function persistBoardOrder() {
       }
 
       if (error) {
+        isMutating = false;
         setStatus(`Move save failed: ${error.message}`);
         return;
       }
+      movedCount += 1;
     }
   }
 
-  await loadTopics();
-  setStatus(`Move saved (${formatDateOnly(new Date())})`);
+  await endMutation();
+  setStatus(
+    movedCount > 0
+      ? `Move saved (${formatDateOnly(new Date())})`
+      : "No position change detected"
+  );
 }
 
 async function deleteTopic(topicId) {
@@ -396,6 +444,9 @@ async function addMonth() {
 
 function bindEvents() {
   filterCategorySelect.addEventListener("change", render);
+  editorNameInput.addEventListener("input", () => {
+    localStorage.setItem("monthlyInsightsEditorName", editorNameInput.value.trim());
+  });
 
   addMonthBtn.addEventListener("click", async () => {
     await addMonth();
@@ -435,6 +486,26 @@ function bindEvents() {
 
     if (action === "save") await saveTopic(topicId, section);
     if (action === "delete") await deleteTopic(topicId);
+  });
+
+  board.addEventListener("input", (e) => {
+    if (!isEditMode || !e.target.closest("[data-field]")) return;
+    const section = e.target.closest(".topic[data-id]");
+    if (!section) return;
+    const current = collectTopicValues(section);
+    const original = getTopicSnapshotById(current.topicId);
+    section.classList.toggle("is-dirty", isTopicChanged(current, original));
+    setStatus("Unsaved changes");
+  });
+
+  board.addEventListener("change", (e) => {
+    if (!isEditMode || !e.target.closest("[data-field]")) return;
+    const section = e.target.closest(".topic[data-id]");
+    if (!section) return;
+    const current = collectTopicValues(section);
+    const original = getTopicSnapshotById(current.topicId);
+    section.classList.toggle("is-dirty", isTopicChanged(current, original));
+    setStatus("Unsaved changes");
   });
 
   board.addEventListener("dragstart", (e) => {
@@ -493,6 +564,7 @@ function bindEvents() {
 
 async function init() {
   if (!requireClient()) return;
+  editorNameInput.value = localStorage.getItem("monthlyInsightsEditorName") || "";
   supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
   bindEvents();
   await loadTopics();
@@ -502,7 +574,13 @@ async function init() {
     .on(
       "postgres_changes",
       { event: "*", schema: "public", table: "monthly_topics" },
-      () => loadTopics()
+      () => {
+        if (isMutating) {
+          realtimeRefreshPending = true;
+          return;
+        }
+        loadTopics();
+      }
     )
     .subscribe((status) => {
       if (status === "SUBSCRIBED") setStatus("Live sync connected");

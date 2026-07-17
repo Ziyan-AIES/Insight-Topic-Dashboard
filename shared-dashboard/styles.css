@@ -99,6 +99,9 @@ body {
   transition: transform 120ms ease, opacity 120ms ease;
   cursor: grab;
 }
+.topic.is-dirty {
+  background: #eef4ff;
+}
 .topic.dragging {
   opacity: 0.45;
   transform: scale(0.99);
@@ -133,7 +136,7 @@ body {
 }
 .topic .edit-secondary {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 100px;
+  grid-template-columns: minmax(0, 1fr);
   gap: 6px;
 }
 .topic .meta-row {
